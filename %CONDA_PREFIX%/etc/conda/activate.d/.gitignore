@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-chroma_db/
-.env
-
-# Prevent leaking secrets
-**/etc/conda/activate.d/env_vars.bat
