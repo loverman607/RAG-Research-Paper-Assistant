@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+chroma_db/
+.env
+*.pdf
+*.json
+
+**/etc/conda/activate.d/env_vars.bat
