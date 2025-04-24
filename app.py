@@ -4,6 +4,7 @@ from huggingface_hub import login
 from langchain.document_loaders import PyPDFLoader, ArxivLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain.prompts import PromptTemplate
 from langchain.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from tempfile import NamedTemporaryFile
@@ -53,6 +54,7 @@ def load_embeddings():
 def get_or_update_vectorstore(docs, source_name="unknown"):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     docs_split = text_splitter.split_documents(docs)
+    st.info(f"🧩 Split into {len(docs_split)} chunks from {source_name}")
     if not docs_split:
         st.warning("No content was found in the document. Please check the file or arXiv ID.")
         return
@@ -90,6 +92,7 @@ if uploaded_file or arxiv_id:
             source_name = arxiv_id
 
         docs = loader.load()
+        st.success(f"✅ Loaded {len(docs)} document(s) from: {source_name}")
         get_or_update_vectorstore(docs, source_name=source_name)
 
         if uploaded_file:
@@ -106,42 +109,36 @@ if query:
     else:
         retriever = vectorstore.as_retriever()
 
-    from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
+    prompt_template = PromptTemplate.from_template(
+        "IMPORTANT: NEVER SAY 'based on the context' or 'according to the documents' - just answer naturally as if you knew the information.\n\n"
+        "Context:{context}\n\n"
+        "Question: {question}\n\n"
+        "Helpful Answer:"
+    )
 
-prompt_template = PromptTemplate.from_template(
-    "IMPORTANT: NEVER SAY 'based on the context' or 'according to the documents' - just answer naturally as if you knew the information."
-    "Context:{context}\n\n"
-    "Question: {question}\n\n"
-    "Helpful Answer:"
-)
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=load_llm(),
+        chain_type="stuff",
+        retriever=retriever,
+        return_source_documents=False,
+        chain_type_kwargs={"prompt": prompt_template}
+    )
 
-qa_chain = RetrievalQA.from_chain_type(
-    llm=load_llm(),
-    chain_type="stuff",
-    retriever=retriever,
-    return_source_documents=False,
-    chain_type_kwargs={"prompt": prompt_template}
-)
+    with st.spinner("Generating answer..."):
+        result = qa_chain({"query": query})
+        st.markdown("### Question:")
+        st.write(query)
+        st.markdown("### Helpful Answer:")
+        
+        raw_answer = result["result"]
+        parts = raw_answer.split("Question:")
+        if len(parts) > 1:
+            answer = parts[-1].strip()
+            answer = answer.split("Helpful Answer:")[-1].strip()
+        else:
+            answer = raw_answer.strip()
+        st.write(answer)
 
-with st.spinner("Generating answer..."):
-    result = qa_chain({"query": query})
-    st.markdown("### Question:")
-    st.write(query)
-    st.markdown("### Helpful Answer:")
-    
-    raw_answer = result["result"]
-    
-    # Split the response at "Question:" and take the last part
-    parts = raw_answer.split("Question:")
-    if len(parts) > 1:
-        answer = parts[-1].strip()
-        # Further clean if there's additional structure
-        answer = answer.split("Helpful Answer:")[-1].strip()
-    else:
-        answer = raw_answer.strip()
-    
-    st.write(answer)
 
 
 # --- License Notice ---
