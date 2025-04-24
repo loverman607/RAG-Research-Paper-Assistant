@@ -66,7 +66,7 @@ def get_or_update_vectorstore(docs, source_name="unknown"):
     db = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
     db.add_documents(docs_split)
     db.persist()
-    MAX_CHUNKS = 10000
+    MAX_CHUNKS = 5000
     all_docs = db.get()
     all_metadata = all_docs["metadatas"]
     all_ids = all_docs["ids"]
