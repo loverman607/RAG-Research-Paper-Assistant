@@ -5,6 +5,7 @@ from langchain.document_loaders import PyPDFLoader, ArxivLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.vectorstores import Chroma
+from langchain.llms import HuggingFacePipeline
 from langchain.chains import RetrievalQA
 from tempfile import NamedTemporaryFile
 import torch
@@ -35,8 +36,8 @@ def load_llm():
         device_map="auto"
     )
 
-    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0)
-    return pipe
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    return HuggingFacePipeline(pipeline=pipe)
 
 @st.cache_resource
 def load_embeddings():
@@ -46,6 +47,9 @@ def load_embeddings():
 def get_or_update_vectorstore(docs, source_name="unknown"):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     docs_split = text_splitter.split_documents(docs)
+    if not docs_split:
+        st.warning("No content was found in the document. Please check the file or arXiv ID.")
+        return
     for doc in docs_split:
         doc.metadata["source"] = source_name
     embeddings = load_embeddings()
@@ -76,7 +80,7 @@ if uploaded_file or arxiv_id:
             loader = PyPDFLoader(tmp_path)
             source_name = uploaded_file.name
         else:
-            loader = ArxivLoader(arxiv_id=arxiv_id)
+            loader = ArxivLoader(query=f"id:{arxiv_id}", load_max_docs=1, pdf=True)
             source_name = arxiv_id
 
         docs = loader.load()
@@ -105,14 +109,22 @@ if query:
 
     with st.spinner("Generating answer..."):
         result = qa_chain({"query": query})
-        st.markdown("### Answer:")
-        st.write(result["result"])
-
-        if result.get("source_documents"):
-            st.markdown("#### Source Info:")
-            for i, doc in enumerate(result["source_documents"], 1):
-                source = doc.metadata.get("source", "Unknown source")
-                st.write(f"{i}. From: `{source}`")
+        st.markdown("### Question:")
+        st.write(query)
+        st.markdown("### Helpful Answer:")
+        
+        raw_answer = result["result"]
+        
+        # Split the response at "Question:" and take the last part
+        parts = raw_answer.split("Question:")
+        if len(parts) > 1:
+            answer = parts[-1].strip()
+            # Further clean if there's additional structure
+            answer = answer.split("Helpful Answer:")[-1].strip()
+        else:
+            answer = raw_answer.strip()
+        
+        st.write(answer)
 
 # --- License Notice ---
 st.markdown("---")
