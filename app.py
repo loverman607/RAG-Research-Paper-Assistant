@@ -10,6 +10,7 @@ from langchain.chains import RetrievalQA
 from tempfile import NamedTemporaryFile
 import torch
 import os
+from datetime import datetime
 
 CHROMA_DB_DIR = "chroma_db"
 
@@ -52,7 +53,7 @@ def load_embeddings():
 
 # --- Function to load or create persistent ChromaDB vectorstore ---
 def get_or_update_vectorstore(docs, source_name="unknown"):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
     docs_split = text_splitter.split_documents(docs)
     st.info(f"🧩 Split into {len(docs_split)} chunks from {source_name}")
     if not docs_split:
@@ -60,10 +61,25 @@ def get_or_update_vectorstore(docs, source_name="unknown"):
         return
     for doc in docs_split:
         doc.metadata["source"] = source_name
+        doc.metadata["added_at"] = datetime.utcnow().isoformat()
     embeddings = load_embeddings()
     db = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
     db.add_documents(docs_split)
     db.persist()
+    MAX_CHUNKS = 10000
+    all_docs = db.get()
+    all_metadata = all_docs["metadatas"]
+    all_ids = all_docs["ids"]
+
+    if len(all_ids) > MAX_CHUNKS:
+        combined = list(zip(all_ids, all_metadata))
+        combined = [item for item in combined if "added_at" in item[1]]
+        combined.sort(key=lambda x: x[1]["added_at"])
+        num_to_delete = len(all_ids) - MAX_CHUNKS
+        ids_to_delete = [item[0] for item in combined[:num_to_delete]]
+        db._collection.delete(ids=ids_to_delete)
+
+        st.info(f"🧹 Cleaned up {num_to_delete} old chunks")
     return db
 
 # --- Load existing vectorstore for global query ---
@@ -110,7 +126,10 @@ if query:
         retriever = vectorstore.as_retriever()
 
     prompt_template = PromptTemplate.from_template(
-        "IMPORTANT: NEVER SAY 'based on the context' or 'according to the documents' - just answer naturally as if you knew the information.\n\n"
+        """You are a helpful assistant. Answer the question clearly and concisely using only the provided context.
+        Do NOT include the context itself in your answer.
+        Do NOT mention that you're using context or documents.
+        Just provide a direct answer to the question."""
         "Context:{context}\n\n"
         "Question: {question}\n\n"
         "Helpful Answer:"
@@ -144,6 +163,3 @@ if query:
 # --- License Notice ---
 st.markdown("---")
 st.caption("This app uses the DeepSeek LLM (7B Chat) model released under the MIT license. Learn more at [DeepSeek on Hugging Face](https://huggingface.co/deepseek-ai/deepseek-llm-7b-chat)..")
-# --- Credits ---
-st.markdown("---")
-st.caption("**Credits:** This app integrates components from [Meta LLaMA 2](https://ai.meta.com/resources/models-and-libraries/llama-downloads/), [LangChain](https://github.com/langchain-ai/langchain), [Hugging Face Transformers](https://huggingface.co/docs/transformers), [ChromaDB](https://www.trychroma.com/), and [Streamlit](https://streamlit.io/).")
