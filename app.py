@@ -13,14 +13,12 @@ import os
 CHROMA_DB_DIR = "chroma_db"
 
 # --- Authenticate with Hugging Face Hub ---
-hf_token = os.getenv("HF_TOKEN")
-if hf_token:
-    login(token=hf_token)
+# DeepSeek model is public — no login needed
 
 # --- Load LLM and Embeddings ---
 @st.cache_resource
 def load_llm():
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
+    tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/deepseek-llm-7b-chat")
 
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -30,13 +28,22 @@ def load_llm():
     )
 
     model = AutoModelForCausalLM.from_pretrained(
-        "meta-llama/Llama-2-7b-chat-hf",
+        "deepseek-ai/deepseek-llm-7b-chat",
         quantization_config=quant_config,
         device_map="auto"
     )
 
-    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0)
-    return pipe
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=512,
+        temperature=0.7,
+        do_sample=True,
+        top_p=0.95
+    )
+    from langchain.llms import HuggingFacePipeline
+    return HuggingFacePipeline(pipeline=pipe)
 
 @st.cache_resource
 def load_embeddings():
@@ -46,6 +53,9 @@ def load_embeddings():
 def get_or_update_vectorstore(docs, source_name="unknown"):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     docs_split = text_splitter.split_documents(docs)
+    if not docs_split:
+        st.warning("No content was found in the document. Please check the file or arXiv ID.")
+        return
     for doc in docs_split:
         doc.metadata["source"] = source_name
     embeddings = load_embeddings()
@@ -76,7 +86,7 @@ if uploaded_file or arxiv_id:
             loader = PyPDFLoader(tmp_path)
             source_name = uploaded_file.name
         else:
-            loader = ArxivLoader(arxiv_id=arxiv_id)
+            loader = ArxivLoader(query=f"id:{arxiv_id}", load_max_docs=1, pdf=True)
             source_name = arxiv_id
 
         docs = loader.load()
@@ -96,24 +106,47 @@ if query:
     else:
         retriever = vectorstore.as_retriever()
 
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=load_llm(),
-        chain_type="stuff",
-        retriever=retriever,
-        return_source_documents=True
-    )
+    from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
 
-    with st.spinner("Generating answer..."):
-        result = qa_chain({"query": query})
-        st.markdown("### Answer:")
-        st.write(result["result"])
+prompt_template = PromptTemplate.from_template(
+    "IMPORTANT: NEVER SAY 'based on the context' or 'according to the documents' - just answer naturally as if you knew the information."
+    "Context:{context}\n\n"
+    "Question: {question}\n\n"
+    "Helpful Answer:"
+)
 
-        if result.get("source_documents"):
-            st.markdown("#### Source Info:")
-            for i, doc in enumerate(result["source_documents"], 1):
-                source = doc.metadata.get("source", "Unknown source")
-                st.write(f"{i}. From: `{source}`")
+qa_chain = RetrievalQA.from_chain_type(
+    llm=load_llm(),
+    chain_type="stuff",
+    retriever=retriever,
+    return_source_documents=False,
+    chain_type_kwargs={"prompt": prompt_template}
+)
+
+with st.spinner("Generating answer..."):
+    result = qa_chain({"query": query})
+    st.markdown("### Question:")
+    st.write(query)
+    st.markdown("### Helpful Answer:")
+    
+    raw_answer = result["result"]
+    
+    # Split the response at "Question:" and take the last part
+    parts = raw_answer.split("Question:")
+    if len(parts) > 1:
+        answer = parts[-1].strip()
+        # Further clean if there's additional structure
+        answer = answer.split("Helpful Answer:")[-1].strip()
+    else:
+        answer = raw_answer.strip()
+    
+    st.write(answer)
+
 
 # --- License Notice ---
 st.markdown("---")
-st.caption("This app uses the LLaMA 2 model from Meta. Usage complies with Meta's non-commercial license. Learn more at [Meta's LLaMA license page](https://ai.meta.com/resources/models-and-libraries/llama-downloads/).")
+st.caption("This app uses the DeepSeek LLM (7B Chat) model released under the MIT license. Learn more at [DeepSeek on Hugging Face](https://huggingface.co/deepseek-ai/deepseek-llm-7b-chat)..")
+# --- Credits ---
+st.markdown("---")
+st.caption("**Credits:** This app integrates components from [Meta LLaMA 2](https://ai.meta.com/resources/models-and-libraries/llama-downloads/), [LangChain](https://github.com/langchain-ai/langchain), [Hugging Face Transformers](https://huggingface.co/docs/transformers), [ChromaDB](https://www.trychroma.com/), and [Streamlit](https://streamlit.io/).")
